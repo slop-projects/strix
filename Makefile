@@ -1,4 +1,4 @@
-.PHONY: help install dev-install format lint type-check security check-all clean pre-commit setup-dev dev viewer wheel tui-build tui-test tui-lint
+.PHONY: help install dev-install format format-check lint lint-check fix type-check security check-all clean pre-commit setup-dev dev viewer wheel tui-build tui-test tui-lint release-smoke
 
 TUI_BINARY := build/sidecar/strix-tui$(if $(filter Windows_NT,$(OS)),.exe)
 
@@ -8,15 +8,21 @@ help:
 	@echo "  install       - Install production dependencies"
 	@echo "  dev-install   - Install development dependencies"
 	@echo ""
-	@echo "Code Quality:"
-	@echo "  format        - Format code with ruff"
-	@echo "  lint          - Lint code with ruff"
+	@echo "Code Quality (read-only, never edit files):"
+	@echo "  format-check  - Check formatting with ruff (read-only)"
+	@echo "  lint-check    - Lint code with ruff (read-only, no --fix)"
 	@echo "  type-check    - Run type checking with mypy and pyright"
 	@echo "  security      - Run security checks with bandit"
-	@echo "  check-all     - Run all code quality checks"
+	@echo "  check-all     - Run all code quality checks (read-only)"
+	@echo ""
+	@echo "Fixing (rewrites files):"
+	@echo "  format        - Format code with ruff"
+	@echo "  lint          - Lint code with ruff and apply fixes"
+	@echo "  fix           - Apply all autofixes (format + lint)"
 	@echo ""
 	@echo "Development:"
 	@echo "  pre-commit    - Run pre-commit hooks on all files"
+	@echo "  release-smoke - Verify published installer URLs and sandbox image"
 	@echo "  viewer        - Rebuild the local-viewer SPA (commit the output)"
 	@echo "  wheel         - Build a platform wheel with the bundled Go sidecar"
 	@echo "  clean         - Clean up cache files and artifacts"
@@ -40,10 +46,23 @@ format:
 	uv run ruff format .
 	@echo "✅ Code formatting complete!"
 
+format-check:
+	@echo "🔍 Checking formatting with ruff (read-only)..."
+	uv run ruff format --check .
+	@echo "✅ Formatting is clean!"
+
 lint:
-	@echo "🔍 Linting code with ruff..."
+	@echo "🔍 Linting code with ruff (applying fixes)..."
 	uv run ruff check . --fix
 	@echo "✅ Linting complete!"
+
+lint-check:
+	@echo "🔍 Linting code with ruff (read-only)..."
+	uv run ruff check .
+	@echo "✅ Linting is clean!"
+
+fix: format lint
+	@echo "✅ Autofixes applied!"
 
 type-check:
 	@echo "🔍 Type checking with mypy..."
@@ -57,7 +76,7 @@ security:
 	uv run bandit -r strix/ -c pyproject.toml
 	@echo "✅ Security checks complete!"
 
-check-all: format lint type-check security
+check-all: format-check lint-check type-check security
 	@echo "✅ All code quality checks passed!"
 
 pre-commit:
@@ -93,3 +112,8 @@ tui-test:
 
 tui-lint:
 	cd strix/interface/tui && test -z "$$(gofmt -l .)" && go vet ./...
+
+release-smoke:
+	@echo "🚀 Verifying published installer URLs and sandbox image..."
+	uv run python scripts/release_smoke.py
+	@echo "✅ Release/install smoke check passed!"

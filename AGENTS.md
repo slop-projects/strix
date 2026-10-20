@@ -42,7 +42,7 @@ npx skills add usestrix/strix
 ## Contributing to this repo
 
 - Python 3.12+, managed with `uv`. Install dev deps: `make dev-install`.
-- Lint/format/type-check/security, all in one: `make check-all` (ruff, mypy, bandit).
+- Lint/format/type-check/security, all in one: `make check-all` (ruff, mypy, bandit). It is read-only — it reports issues without editing files; run `make fix` to apply formatting and lint autofixes.
 - Tests: `uv run pytest`.
 - Run from source: `uv run strix --target <target>`.
 - Layout: `strix/agents` (agent graph + prompts), `strix/tools` (proxy, browser, terminal, scanners), `strix/runtime` (Docker sandbox), `strix/report` (findings, SARIF), `strix/skills` (internal knowledge packs the pentest agents load — different from the consumer skills in `skills/`), `strix/interface` (CLI/TUI), `containers/` (sandbox image).

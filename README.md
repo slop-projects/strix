@@ -1,12 +1,12 @@
 <p align="center">
   <a href="https://strix.ai/">
-    <img src="https://github.com/usestrix/.github/raw/main/imgs/cover.png" alt="Strix Banner" width="100%">
+    <img src="docs/images/logo.png" alt="Strix logo" width="160">
   </a>
 </p>
 
 <div align="center">
 
-# Strix
+# Strix · Slop Projects
 
 ### The open-source AI pentesting tool. Autonomous AI hackers that find and fix your app’s vulnerabilities.
 
@@ -31,6 +31,25 @@
 <a href="https://trendshift.io/repositories/15362" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15362" alt="usestrix/strix | Trendshift" width="250" height="55"/></a>
 
 </div>
+
+## About this copy
+
+This repository contains local improvements to [Strix by usestrix](https://github.com/usestrix/strix), an Apache-2.0 open-source project. The original project's authors retain credit for the underlying software and logo. The hosted Strix platform, public package, and upstream installer linked below are operated by the original project.
+
+This copy adds read-only code quality checks, a viewer request body size limit, Docker security documentation, and release artifact smoke checks. See [the code review and improvement roadmap](docs/project-review.md) for proposed next steps.
+
+### Run this copy from source
+
+With Python 3.12+, [uv](https://docs.astral.sh/uv/), Docker, and Go 1.24+ (for the terminal interface) installed, run:
+
+```bash
+git clone https://github.com/slop-projects/strix.git
+cd strix
+uv sync --frozen
+uv run strix --help
+```
+
+Configure your model and credentials using the configuration section below before scanning a system you are authorized to test. The upstream installer installs the original project's release; use the source checkout to run the changes in this repository.
 
 
 > [!TIP]

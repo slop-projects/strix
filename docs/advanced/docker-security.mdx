@@ -1,0 +1,152 @@
+---
+title: "Docker Security Boundary"
+description: "What the Strix sandbox can reach, what it mounts, and the limits to set"
+---
+
+Strix runs every scan inside a disposable Docker container called the **sandbox**.
+The agent executes real offensive-security tools there, so the sandbox is
+deliberately granted powers a normal container would not have: raw-socket network
+capabilities, outbound network access, and writable access to the target source
+tree. This page describes exactly where the boundary sits so you can decide how
+much isolation your deployment needs.
+
+<Warning>
+  The sandbox is built for authorized penetration testing. It is not a hard
+  security boundary against a malicious LLM or a malicious target. Run Strix on
+  hosts and Docker daemons you are willing to expose to the agent's actions, and
+  prefer a dedicated, disposable machine over your primary workstation.
+</Warning>
+
+## What runs where
+
+- The **Strix host process** runs on your machine (or your CI runner) and holds
+  your LLM key and scan configuration.
+- The **sandbox container** runs the agent's tools — `nmap`, `sqlmap`, Nuclei,
+  Playwright/Chromium, Caido, and a bash shell. Everything the agent executes
+  happens inside this container, not on the host.
+- The container image is `ghcr.io/usestrix/strix-sandbox` (override with
+  `STRIX_IMAGE`). It is based on Kali Linux and runs as the non-root
+  `pentester` user, which has passwordless `sudo` inside the container.
+
+## Linux capabilities
+
+The container is created with `CAP_NET_ADMIN` and `CAP_NET_RAW` added. These are
+required for SYN scans (`nmap -sS`), packet capture, and other raw-socket tools.
+
+<Note>
+  `CAP_NET_ADMIN` and `CAP_NET_RAW` apply to the container's own network
+  namespace. They let the agent manipulate network settings and craft raw packets
+  for the container, and are what make tools like `nmap` work — they do not by
+  themselves grant host root.
+</Note>
+
+When a scan's manifest requires it (for example, tooling that mounts a
+filesystem), Strix additionally adds `CAP_SYS_ADMIN`, `--device /dev/fuse`, and
+`security_opt=apparmor:unconfined`. This is a materially weaker configuration,
+because `CAP_SYS_ADMIN` is close to root inside the container.
+
+## Network reach
+
+| From the sandbox you can reach | How |
+| ------------------------------ | --- |
+| The internet and any routable target | Default Docker bridge network (NAT) |
+| Services on the **host machine** | `host.docker.internal` (mapped to `host-gateway`) |
+| The in-container HTTP proxy (Caido) | `127.0.0.1:48080` inside the container |
+
+- **Outbound access is unrestricted by default.** The sandbox uses Docker's
+  default `bridge` network, so it can reach anything the host can route to. This
+  is intentional: the agent must reach the target it is testing.
+- **The host is reachable.** Strix adds `host.docker.internal` →
+  `host-gateway`, and rewrites `localhost`/`127.0.0.1` scan targets to
+  `host.docker.internal` so the agent can test apps you are serving locally.
+- **Inbound is closed.** Exposed container ports (Caido on `48080`) are published
+  to `127.0.0.1` on the host only, so they are not reachable from other machines.
+- **Isolate the network if you need to.** Set `STRIX_DOCKER_SANDBOX_NETWORK` to
+  attach the container to a named Docker network instead of the default bridge.
+  When set, published ports are dropped and the viewer reaches Caido over that
+  network. Combine this with a network that has no route to your internal
+  services for the tightest isolation.
+
+<ParamField path="STRIX_DOCKER_SANDBOX_NETWORK" type="string">
+  Name of a Docker network to attach the sandbox to. When unset, the container
+  uses Docker's default bridge network and publishes Caido to `127.0.0.1`.
+</ParamField>
+
+## Host mounts
+
+Strix bind-mounts the target into the container:
+
+- Each local source you pass with `--target` is mounted **read-write** at
+  `/workspace/<subdir>`. The agent can create, edit, and delete files in your
+  real source tree so it can, for example, patch code or write PoCs.
+- For local sources, the metadata directories `.git`, `.agents`, and
+  `.codex` are mounted **read-only** on top of the writable tree, so `git`
+  history and agent configuration cannot be modified by the sandbox.
+
+<Warning>
+  A read-write bind mount is real host filesystem access to that directory.
+  Point Strix at a copy or a dedicated checkout when scanning untrusted code, and
+  never mount a directory that contains secrets you would not hand to the agent.
+</Warning>
+
+Nothing else on the host filesystem is mounted into the container.
+
+## Resource limits
+
+By default the sandbox has **no CPU, memory, or PID limits** — Docker's
+unbounded defaults. For an autonomous agent that runs arbitrary tools, configure
+these on any shared or long-lived host. All limits are opt-in via environment
+variables read when the container is created.
+
+<ParamField path="STRIX_SANDBOX_MEM_LIMIT" type="string">
+  Container memory limit, e.g. `4g`. Unset means unbounded.
+</ParamField>
+
+<ParamField path="STRIX_SANDBOX_CPUS" type="number">
+  CPU quota in cores, e.g. `2`. Unset means unbounded.
+</ParamField>
+
+<ParamField path="STRIX_SANDBOX_PIDS_LIMIT" type="integer">
+  Maximum number of processes in the container, e.g. `512`. Unset means
+  unbounded.
+</ParamField>
+
+<ParamField path="STRIX_SANDBOX_SHM_SIZE" type="string">
+  Size of `/dev/shm`, e.g. `1g`. Unset uses Docker's default. Relevant for
+  browser-based testing (Chromium uses shared memory).
+</ParamField>
+
+**Log limits are on by default.** The container's `json-file` log is capped at
+`50m` per file with `3` rotated files (a 150 MB on-disk cap) so a runaway tool
+cannot fill the host disk. Opt out with `STRIX_SANDBOX_LOG_MAX_SIZE=0`.
+
+<ParamField path="STRIX_SANDBOX_LOG_MAX_SIZE" default="50m" type="string">
+  Maximum size of each log file. Set to `0`, `off`, `none`, or `unlimited` to
+  disable the cap.
+</ParamField>
+
+<ParamField path="STRIX_SANDBOX_LOG_MAX_FILE" default="3" type="string">
+  Number of rotated log files to keep.
+</ParamField>
+
+## Hardening checklist
+
+For deployments that need tighter isolation than the defaults:
+
+1. **Run Docker on a dedicated host** (or a disposable VM) rather than your
+   primary workstation, and give the Docker daemon only the trust it needs.
+2. **Restrict egress** with `STRIX_DOCKER_SANDBOX_NETWORK` and a network that
+   cannot reach internal services you did not intend to test.
+3. **Set resource limits** (`STRIX_SANDBOX_MEM_LIMIT`, `STRIX_SANDBOX_CPUS`,
+   `STRIX_SANDBOX_PIDS_LIMIT`) so a runaway tool cannot exhaust the host.
+4. **Scan a copy, not your working tree**, when the target code is untrusted —
+   the bind mount is writable.
+5. **Keep the viewer local.** It binds to `127.0.0.1` by default. If you expose
+   it with `--host`, requests are still gated behind a per-process session token,
+   but you are widening the attack surface; only do so on a trusted network.
+
+## Related
+
+- [Sandbox Tools](/tools/sandbox) — the tools pre-installed in the container.
+- [Configuration](/advanced/configuration) — the full environment-variable
+  reference.

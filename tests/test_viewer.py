@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sqlite3
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from strix.core.paths import latest_run_dir, runs_base_dir
-from strix.interface.viewer.server import serve
+from strix.interface.viewer.server import MAX_REQUEST_BODY_BYTES, serve
 from strix.interface.viewer.transcript import (
     build_run_state,
     read_report_markdown,
@@ -679,6 +680,57 @@ def test_server_rejects_path_traversal(tmp_path: Path, monkeypatch: pytest.Monke
         # A traversal target must never leak the file; it falls back to index.html.
         _, _, body = _get(f"{url}/..%2f..%2fsecret.txt")
         assert b"top secret" not in body
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def _post_raw(url: str, path: str, *, body: bytes, content_length: str) -> tuple[int, bytes]:
+    """POST with a caller-controlled Content-Length header (http.client sends it verbatim)."""
+    conn = http.client.HTTPConnection("127.0.0.1", urlsplit(url).port, timeout=5)
+    try:
+        conn.putrequest("POST", path)
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", content_length)
+        conn.endheaders(body)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def test_server_rejects_oversized_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The viewer can be bound beyond localhost, so an oversized Content-Length
+    # must be refused before any bytes are read into memory.
+    run_dir = _make_run(tmp_path, "big", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+
+    httpd, url, _ = serve(run_dir, open_browser=False)
+    try:
+        status, raw = _post_raw(
+            url,
+            "/api/event",
+            body=b"{}",
+            content_length=str(MAX_REQUEST_BODY_BYTES + 1),
+        )
+        assert status == 413
+        assert json.loads(raw)["error"] == "payload_too_large"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_server_rejects_malformed_content_length(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _make_run(tmp_path, "badlen", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+
+    httpd, url, _ = serve(run_dir, open_browser=False)
+    try:
+        status, raw = _post_raw(url, "/api/event", body=b"{}", content_length="not-a-number")
+        assert status == 400
+        assert json.loads(raw)["error"] == "invalid_content_length"
     finally:
         httpd.shutdown()
         httpd.server_close()

@@ -60,7 +60,7 @@ Skills are specialized knowledge packages that enhance agent capabilities. See [
 2. **Fork and branch** - Work from the `main` branch
 3. **Make your changes** - Follow existing code style
 4. **Write/update tests** - Ensure coverage for new features
-5. **Run quality checks** - `make check-all` should pass
+5. **Run quality checks** - `make check-all` should pass (it is read-only and never edits files; run `make fix` first to apply formatting and lint autofixes)
 6. **Submit PR** - Link to issue and provide context
 
 ### PR Guidelines

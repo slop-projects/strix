@@ -64,6 +64,7 @@
             "group": "Advanced",
             "pages": [
               "advanced/configuration",
+              "advanced/docker-security",
               "advanced/skills",
               "contributing"
             ]

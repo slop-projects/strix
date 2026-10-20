@@ -107,6 +107,24 @@ def resolve_run_dir(base_dir: Path, run_param: str | None, default_run_dir: Path
     return candidate
 
 
+# Upper bound on a JSON request body. The viewer's POSTs carry only small
+# payloads (an email, an OTP code, or a short message), so 1 MiB sits far above
+# any legitimate request. It matters because the viewer can be bound beyond
+# localhost with ``--host``: without a cap, an unauthenticated caller controls
+# the ``Content-Length`` and can make the server buffer an arbitrarily large
+# body in memory. Oversized bodies are refused before any bytes are read.
+MAX_REQUEST_BODY_BYTES = 1 << 20
+
+
+class _RequestRejectedError(Exception):
+    """A request refused before its body was read (sent back as a JSON error)."""
+
+    def __init__(self, status: HTTPStatus, code: str) -> None:
+        super().__init__(code)
+        self.status = status
+        self.code = code
+
+
 # Prefix of the cookie carrying the per-process session capability. The bound
 # port is appended (``strix_viewer_session_<port>``) because browsers scope
 # cookies by host only, never by port: concurrent viewers on 127.0.0.1 would
@@ -188,13 +206,32 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
             except BrokenPipeError:
                 logger.debug("viewer client disconnected during POST %s", path)
+            except _RequestRejectedError as exc:
+                # Refused before the body was read; close instead of trying to
+                # resynchronize with the unread bytes still queued on the socket.
+                self.close_connection = True
+                logger.warning("viewer rejected POST %s: %s", path, exc.code)
+                self._send_json(exc.status, {"error": exc.code})
             except Exception:
                 # A bad request must never kill the worker thread.
                 logger.exception("viewer request failed: POST %s", path)
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
 
         def _read_body(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length") or 0)
+            raw_length = self.headers.get("Content-Length")
+            try:
+                length = int(raw_length) if raw_length else 0
+            except ValueError as exc:
+                raise _RequestRejectedError(
+                    HTTPStatus.BAD_REQUEST, "invalid_content_length"
+                ) from exc
+            if length < 0:
+                raise _RequestRejectedError(HTTPStatus.BAD_REQUEST, "invalid_content_length")
+            if length > MAX_REQUEST_BODY_BYTES:
+                # Refuse without reading, so an oversized body never lands in RAM.
+                raise _RequestRejectedError(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "payload_too_large"
+                )
             raw = self.rfile.read(length) if length else b""
             try:
                 body = json.loads(raw or b"{}")
